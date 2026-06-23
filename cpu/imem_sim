@@ -1,0 +1,67 @@
+#! /c/Source/iverilog-install/bin/vvp
+:ivl_version "12.0 (devel)" "(s20150603-1539-g2693dd32b)";
+:ivl_delay_selection "TYPICAL";
+:vpi_time_precision - 12;
+:vpi_module "E:\iverilog\lib\ivl\system.vpi";
+:vpi_module "E:\iverilog\lib\ivl\vhdl_sys.vpi";
+:vpi_module "E:\iverilog\lib\ivl\vhdl_textio.vpi";
+:vpi_module "E:\iverilog\lib\ivl\v2005_math.vpi";
+:vpi_module "E:\iverilog\lib\ivl\va_math.vpi";
+:vpi_module "E:\iverilog\lib\ivl\v2009.vpi";
+S_0000024d1ac1ac50 .scope package, "$unit" "$unit" 2 1;
+ .timescale 0 0;
+S_0000024d1ac1ade0 .scope module, "insn_mem_tb" "insn_mem_tb" 3 2;
+ .timescale -9 -12;
+v0000024d1acd65e0_0 .var "addr", 31 0;
+v0000024d1acd6680_0 .net "instr", 31 0, L_0000024d1acd6860;  1 drivers
+S_0000024d1acd6450 .scope module, "dut" "insn_mem" 3 4, 4 1 0, S_0000024d1ac1ade0;
+ .timescale 0 0;
+    .port_info 0 /INPUT 32 "addr";
+    .port_info 1 /OUTPUT 32 "instr";
+P_0000024d1aca30c0 .param/l "DEPTH" 0 4 2, +C4<00000000000000000000010000000000>;
+P_0000024d1aca30f8 .param/str "PROG_FILE" 0 4 3, "program.hex";
+L_0000024d1acd6860 .functor BUFZ 32, L_0000024d1acd6720, C4<00000000000000000000000000000000>, C4<00000000000000000000000000000000>, C4<00000000000000000000000000000000>;
+v0000024d1aca3290_0 .net *"_ivl_0", 31 0, L_0000024d1acd6720;  1 drivers
+v0000024d1aca2ee0_0 .net *"_ivl_3", 29 0, L_0000024d1acd67c0;  1 drivers
+v0000024d1ac1af70_0 .net "addr", 31 0, v0000024d1acd65e0_0;  1 drivers
+v0000024d1ac1a7f0_0 .net "instr", 31 0, L_0000024d1acd6860;  alias, 1 drivers
+v0000024d1ac1a890 .array "mem", 1023 0, 31 0;
+L_0000024d1acd6720 .array/port v0000024d1ac1a890, L_0000024d1acd67c0;
+L_0000024d1acd67c0 .part v0000024d1acd65e0_0, 2, 30;
+    .scope S_0000024d1acd6450;
+T_0 ;
+    %vpi_call/w 4 13 "$readmemh", P_0000024d1aca30f8, v0000024d1ac1a890 {0 0 0};
+    %end;
+    .thread T_0;
+    .scope S_0000024d1ac1ade0;
+T_1 ;
+    %vpi_call/w 3 6 "$dumpfile", "imem_tb.vcd" {0 0 0};
+    %vpi_call/w 3 6 "$dumpvars", 32'sb00000000000000000000000000000000, S_0000024d1ac1ade0 {0 0 0};
+    %delay 10000, 0;
+    %pushi/vec4 0, 0, 32;
+    %store/vec4 v0000024d1acd65e0_0, 0, 32;
+    %delay 10000, 0;
+    %load/vec4 v0000024d1acd6680_0;
+    %cmpi/ne 51, 0, 32;
+    %jmp/0xz  T_1.0, 6;
+    %vpi_call/w 3 8 "$error", "FAIL at addr 0: got %h", v0000024d1acd6680_0 {0 0 0};
+T_1.0 ;
+    %pushi/vec4 4, 0, 32;
+    %store/vec4 v0000024d1acd65e0_0, 0, 32;
+    %delay 10000, 0;
+    %load/vec4 v0000024d1acd6680_0;
+    %cmpi/ne 1106227, 0, 32;
+    %jmp/0xz  T_1.2, 6;
+    %vpi_call/w 3 10 "$error", "FAIL at addr 4: got %h", v0000024d1acd6680_0 {0 0 0};
+T_1.2 ;
+    %vpi_call/w 3 11 "$display", "insn_mem: PASSED" {0 0 0};
+    %vpi_call/w 3 11 "$finish" {0 0 0};
+    %end;
+    .thread T_1;
+# The file index is used to find the file name in the following table.
+:file_names 5;
+    "N/A";
+    "<interactive>";
+    "-";
+    "testbench/insn_mem_tb.sv";
+    "rtl/insn_mem.sv";

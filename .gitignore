@@ -1,0 +1,23 @@
+# 仿真生成的文件
+*.vcd
+*.vvp
+*.vdb
+simv
+simv.daidir/
+
+# 编译生成的文件
+*.o
+*.exe
+
+# 机器码文件（由汇编器生成，可以从源码重新生成）
+*.hex
+
+# 编辑器临时文件
+*.swp
+*.swo
+*~
+.DS_Store
+
+# 你的项目特定
+programs/*.hex
+.claude
