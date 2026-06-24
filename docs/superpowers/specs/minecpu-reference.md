@@ -237,7 +237,7 @@ vvp simv
 | 阶段 | 内容 | 预计工作量 |
 |------|------|:--:|
 | A | **异常/CSR 支持** — CSR 寄存器 (mtvec/mepc/mcause/mstatus)、ecall 指令、非法指令 trap、mret 返回 | ✅ 已完成 |
-| B | **Pipeline** — 5 级流水 (IF/ID/EX/MEM/WB)、转发/旁路解决数据冒险、冲刷解决控制冒险 | 大 |
+| B | **Pipeline** — 5 级流水 + forwarding + load-use stall + 写旁路 | ✅ 已完成 |
 | C | **VGA Snake 适配** — 把 snake.c 改到 VGA 帧缓存 + PS/2 键盘输入 | 小 |
 
 ### 8.3 未来应用层任务
