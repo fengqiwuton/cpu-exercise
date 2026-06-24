@@ -43,6 +43,7 @@ STORES    = {'sb','sh','sw'}
 BRANCHES  = {'beq','bne','blt','bge','bltu','bgeu'}
 JUMPS     = {'jal','jalr'}
 UPPERS    = {'lui','auipc'}
+PSEUDO    = {'la','nop','li','mv','call','ret','j'}  # expanded in pass 1
 
 # ── helpers ─────────────────────────────────────────────────
 def parse_reg(s):
@@ -114,10 +115,45 @@ def enc_upper(mnem, rd, imm):
     """LUI/AUIPC: imm = 20-bit upper immediate, stored in instr[31:12]."""
     return (imm & 0xFFFFF) << 12 | (rd << 7) | (OP_LUI if mnem == 'lui' else OP_AUIPC)
 
+def expand_pseudo(mnem, ops, addr, labels):
+    """Expand pseudo-instructions into real RV32I instructions.
+    Returns list of (mnem, ops) tuples."""
+    if mnem == 'la':
+        # la rd, symbol → auipc rd, hi20 + addi rd, rd, lo12
+        rd = ops[0]
+        sym = ops[1]
+        if sym in labels:
+            offset = labels[sym] - addr
+        else:
+            offset = parse_imm(sym)
+        hi = (offset + 0x800) & 0xFFFFF000
+        lo = offset - hi
+        return [('auipc', [rd, str(hi)]), ('addi', [rd, rd, str(lo)])]
+    elif mnem == 'li':
+        # li rd, imm → addi rd, x0, imm (if imm fits 12-bit)
+        return [('addi', [ops[0], 'x0', ops[1]])]
+    elif mnem == 'mv':
+        # mv rd, rs → addi rd, rs, 0
+        return [('addi', [ops[0], ops[1], '0'])]
+    elif mnem == 'call':
+        # call symbol → auipc x1, hi + jalr x1, x1, lo
+        sym = ops[0]
+        if sym in labels: offset = labels[sym] - addr
+        else: offset = parse_imm(sym)
+        hi = (offset + 0x800) & 0xFFFFF000
+        lo = offset - hi
+        return [('auipc', ['x1', str(hi)]), ('jalr', ['x1', 'x1', str(lo)])]
+    elif mnem == 'ret':
+        return [('jalr', ['x0', 'x1', '0'])]
+    elif mnem == 'j':
+        # j label → jal x0, label
+        return [('jal', ['x0', ops[0]])]
+    return [(mnem, ops)]
+
 # ── assemble ────────────────────────────────────────────────
 def assemble(lines):
-    # Pass 1: labels
-    instrs, labels = [], {}
+    # Pass 1: collect labels (pseudo-instructions count as their expanded size)
+    labels = {}
     addr = 0
     for raw in lines:
         line = raw.split('#')[0].strip()
@@ -128,8 +164,26 @@ def assemble(lines):
             line = rest.strip()
             if not line: continue
         parts = line.replace(',', ' ').split()
-        instrs.append((addr, parts[0].lower(), parts[1:]))
-        addr += 4
+        mnem = parts[0].lower()
+        # Count expanded instruction slots (2 for la/call, 1 for others)
+        addr += 8 if mnem in ('la','call') else 4
+
+    # Pass 2: expand + encode
+    instrs = []
+    addr = 0
+    for raw in lines:
+        line = raw.split('#')[0].strip()
+        if not line: continue
+        if ':' in line:
+            _, _, rest = line.partition(':')
+            line = rest.strip()
+            if not line: continue
+        parts = line.replace(',', ' ').split()
+        mnem = parts[0].lower()
+        expanded = expand_pseudo(mnem, parts[1:], addr, labels)
+        for exp_mnem, exp_ops in expanded:
+            instrs.append((addr, exp_mnem, exp_ops))
+            addr += 4
 
     # Pass 2: encode
     code = []
