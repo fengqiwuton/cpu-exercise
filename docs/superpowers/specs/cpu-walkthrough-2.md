@@ -368,5 +368,54 @@ void draw_pixel(int x, int y, unsigned char color) {
 | `uart.sv` | UART TX+RX |
 | `vga_fb.sv` | VGA 帧缓存 + 控制器 |
 | `ps2_kbd.sv` | PS/2 键盘接口 |
-| `cpu_top.sv` | 顶层 + MMIO 路由 + 指令来源切换 |
+| `csr.sv` | CSR 寄存器 + 异常捕获 |
+| `cpu_top.sv` | 顶层 + MMIO 路由 + 指令来源切换 + 异常逻辑 |
 ```
+
+---
+
+## 十二、CSR 寄存器与异常处理
+
+### CSR 寄存器
+
+| 地址 | 名称 | 说明 |
+|------|------|------|
+| `0x300` | mstatus | 机器状态 |
+| `0x305` | mtvec | 异常向量基址 |
+| `0x341` | mepc | 异常 PC |
+| `0x342` | mcause | 异常原因 |
+
+### 异常原因码
+
+| 值 | 含义 |
+|----|------|
+| 2 | 非法指令 |
+| 11 | ecall from M-mode |
+
+### 流程
+
+```
+ecall/非法指令 → 硬件: PC→mepc, mcause←原因 → 跳转mtvec
+    → 异常处理函数执行 → mret → PC=mepc → 返回
+```
+
+### CSR/异常测试
+
+```bash
+python3 tools/assembler.py programs/test_csr.asm -o /tmp/test_csr.hex
+cp /tmp/test_csr.hex program.hex
+iverilog -g2012 -DSIMULATION -o simv rtl/*.sv testbench/cpu_tb.sv
+vvp simv 2>&1 | grep "DEBUG"
+# mem[5]=0000000b → mcause=11(ecall) ✓
+# mem[4]=00000000 → ecall 前 marker ✓
+# mem[6]=00001800 → mstatus 旧值 ✓
+```
+
+### 新增工具
+
+| 工具 | 作用 |
+|------|------|
+| `hex2coe.py` | hex → Xilinx COE (可调深度) |
+| `uart_tool.py` | UART 通信工具 (sim/hw 双模式) |
+| `hex2bin.py` | hex → 引导加载二进制 |
+| 汇编器扩展 | la/li/mv/call + csrrw/csrrs/ecall/mret + .equ |

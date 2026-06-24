@@ -1,4 +1,6 @@
-module cpu_top (
+module cpu_top #(
+    parameter BOOT_EN = 0     // 1 = boot ROM mode, 0 = direct BRAM
+) (
     input logic clk,
     input logic rst_n,
     input logic uart_rx_pin
@@ -18,6 +20,15 @@ module cpu_top (
     logic [2:0]  load_ext;
     logic [1:0]  store_type;
     logic [3:0]  alu_control;
+
+    // CSR / Exception
+    logic        csr_read, csr_write, csr_imm_sel;
+    logic [1:0]  csr_op;
+    logic        ecall_flag, mret_flag;
+    logic        exception;
+    logic [3:0]  except_cause;
+    logic [31:0] csr_rdata, csr_wdata;
+    logic [31:0] mtvec_val, mepc_val;
 
     // Register file
     logic [31:0] rs1_data, rs2_data, rd_data;
@@ -50,7 +61,7 @@ module cpu_top (
     assign pc_plus_4 = pc + 32'h4;
 
     // Boot ROM (0x0000-0x0FFF), Program BRAM (0x1000+)
-    assign boot_sel = (pc[31:12] == 20'h0);  // PC in [0, 0xFFF]
+    assign boot_sel = BOOT_EN && (pc[31:12] == 20'h0);
 
     boot_rom #(.DEPTH(1024)) u_boot_rom (.addr(pc), .instr(boot_instr));
 
@@ -68,9 +79,12 @@ module cpu_top (
     // ── Decode ─────────────────────────────────────────────
     control u_control (
         .opcode(instr[6:0]), .funct3(instr[14:12]), .funct7(instr[31:25]),
+        .funct12(instr[31:20]),
         .reg_write, .alu_src, .mem_write, .mem_to_reg,
         .branch, .jump, .lui_sel, .auipc_sel,
-        .load_ext, .store_type, .alu_control
+        .load_ext, .store_type, .alu_control,
+        .csr_read, .csr_write, .csr_op, .csr_imm_sel,
+        .ecall_flag, .mret_flag, .exception, .except_cause
     );
 
     regfile u_regfile (
@@ -143,6 +157,24 @@ module cpu_top (
         .vga_hsync(), .vga_vsync()
     );
 
+    // ── CSR module ──────────────────────────────────────────
+    assign csr_wdata = csr_imm_sel ? {27'b0, instr[19:15]} : rs1_data;
+
+    csr u_csr (
+        .clk, .rst_n,
+        .addr(instr[31:20]),
+        .write_data(csr_wdata),
+        .csr_write(csr_write),
+        .csr_op(csr_op),
+        .read_data(csr_rdata),
+        .exception(exception),
+        .except_pc(pc),
+        .except_cause(except_cause),
+        .mtvec(mtvec_val),
+        .mepc(mepc_val),
+        .mret_taken()
+    );
+
     assign bus_read_data = uart_sel ? uart_read_data :
                            ps2_sel  ? ps2_read_data :
                            mem_read_data;
@@ -177,11 +209,12 @@ module cpu_top (
 
     // ── rd_data mux ────────────────────────────────────────
     always_comb begin
-        if (mem_to_reg)      rd_data = mem_ext_data;
-        else if (jump)       rd_data = pc_plus_4;
-        else if (lui_sel)    rd_data = imm;
-        else if (auipc_sel)  rd_data = pc + imm;
-        else                 rd_data = alu_result;
+        if (csr_read)          rd_data = csr_rdata;
+        else if (mem_to_reg)   rd_data = mem_ext_data;
+        else if (jump)         rd_data = pc_plus_4;
+        else if (lui_sel)      rd_data = imm;
+        else if (auipc_sel)    rd_data = pc + imm;
+        else                   rd_data = alu_result;
     end
 
     // ── Branch / jump ──────────────────────────────────────
@@ -197,7 +230,9 @@ module cpu_top (
     assign branch_target = pc + imm;
 
     always_comb begin
-        if (jump && alu_src)   next_pc = alu_result;
+        if (mret_flag)         next_pc = mepc_val;
+        else if (exception)    next_pc = mtvec_val;
+        else if (jump && alu_src) next_pc = alu_result;
         else if (jump)         next_pc = pc + imm;
         else if (pc_src)       next_pc = branch_target;
         else                   next_pc = pc_plus_4;

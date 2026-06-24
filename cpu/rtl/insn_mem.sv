@@ -14,6 +14,11 @@ module insn_mem #(parameter DEPTH = 1024) (
 );
     logic [31:0] mem [0:DEPTH-1];
 
+    // Simulation: load program from hex file
+    `ifdef SIMULATION
+    initial $readmemh("program.hex", mem);
+    `endif
+
     // Port A: combinational read (instruction fetch)
     assign instr_a = mem[addr_a[31:2]];
 

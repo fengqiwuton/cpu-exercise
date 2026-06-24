@@ -12,6 +12,7 @@ OP_JAL    = 0b1101111
 OP_JALR   = 0b1100111
 OP_LUI    = 0b0110111
 OP_AUIPC  = 0b0010111
+OP_SYSTEM = 0b1110011
 
 # ── funct3 ──────────────────────────────────────────────────
 F3 = {
@@ -43,7 +44,18 @@ STORES    = {'sb','sh','sw'}
 BRANCHES  = {'beq','bne','blt','bge','bltu','bgeu'}
 JUMPS     = {'jal','jalr'}
 UPPERS    = {'lui','auipc'}
+SYSTEM    = {'ecall','ebreak','mret','csrrw','csrrs','csrrc','csrrwi','csrrsi','csrrci',
+             'csrr','csrw','csrs','csrc'}
 PSEUDO    = {'la','nop','li','mv','call','ret','j'}  # expanded in pass 1
+
+CSR_ADDR = {
+    'mstatus':0x300,'mtvec':0x305,'mepc':0x341,'mcause':0x342,
+    'mtval':0x343,'mie':0x304,'mip':0x344,'misa':0x301,'mvendorid':0xF11,
+    'marchid':0xF12,'mimpid':0xF13,'mhartid':0xF14,
+}
+
+# .equ definitions (user-defined)
+EQU_DEFS = {}  # name -> value
 
 # ── helpers ─────────────────────────────────────────────────
 def parse_reg(s):
@@ -115,6 +127,55 @@ def enc_upper(mnem, rd, imm):
     """LUI/AUIPC: imm = 20-bit upper immediate, stored in instr[31:12]."""
     return (imm & 0xFFFFF) << 12 | (rd << 7) | (OP_LUI if mnem == 'lui' else OP_AUIPC)
 
+def enc_system(mnem, rd, rs1, imm):
+    """CSR / SYSTEM instructions."""
+    if mnem == 'ecall':
+        return 0x00000073
+    if mnem == 'ebreak':
+        return 0x00100073
+    if mnem == 'mret':
+        return 0x30200073
+    # csrrw/csrrs/csrrc: imm = CSR address
+    # csrrwi/csrrsi/csrrci: imm = CSR address, rs1 field = uimm5
+    f3_map = {'csrrw':1,'csrrs':2,'csrrc':3,'csrrwi':5,'csrrsi':6,'csrrci':7}
+    f3 = f3_map.get(mnem, 0)
+    return (imm << 20) | (rs1 << 15) | (f3 << 12) | (rd << 7) | OP_SYSTEM
+
+def parse_csr(s):
+    """Parse CSR name or number."""
+    s = s.strip()
+    if s in CSR_ADDR: return CSR_ADDR[s]
+    if s in EQU_DEFS: return EQU_DEFS[s]
+    if s.startswith('0x'): return int(s, 16)
+    return int(s)
+
+def encode_system(mnem, ops):
+    """Encode CSR/SYSTEM instructions including pseudo-instructions."""
+    # Pseudo: csrr rd, csr = csrrs rd, csr, x0
+    if mnem == 'csrr':
+        return enc_system('csrrs', parse_reg(ops[0]), 0, parse_csr(ops[1]))
+    # Pseudo: csrw csr, rs1 = csrrw x0, csr, rs1
+    if mnem == 'csrw':
+        return enc_system('csrrw', 0, parse_reg(ops[1]), parse_csr(ops[0]))
+    # Pseudo: csrs csr, rs1 = csrrs x0, csr, rs1
+    if mnem == 'csrs':
+        return enc_system('csrrs', 0, parse_reg(ops[1]), parse_csr(ops[0]))
+    # Pseudo: csrc csr, rs1 = csrrc x0, csr, rs1
+    if mnem == 'csrc':
+        return enc_system('csrrc', 0, parse_reg(ops[1]), parse_csr(ops[0]))
+    # Real CSR instructions
+    if mnem in ('ecall','ebreak','mret'):
+        return enc_system(mnem, 0, 0, 0)
+    rd = parse_reg(ops[0])
+    csr_addr = parse_csr(ops[1])
+    if mnem in ('csrrwi','csrrsi','csrrci'):
+        # rs1 field = 5-bit immediate
+        imm5 = parse_imm(ops[2]) & 0x1F
+        return enc_system(mnem, rd, imm5, csr_addr)
+    else:
+        rs1 = parse_reg(ops[2])
+        return enc_system(mnem, rd, rs1, csr_addr)
+
 def expand_pseudo(mnem, ops, addr, labels):
     """Expand pseudo-instructions into real RV32I instructions.
     Returns list of (mnem, ops) tuples."""
@@ -152,12 +213,21 @@ def expand_pseudo(mnem, ops, addr, labels):
 
 # ── assemble ────────────────────────────────────────────────
 def assemble(lines):
+    # Pre-pass: process .equ directives
+    for raw in lines:
+        line = raw.split('#')[0].strip()
+        if not line: continue
+        parts = line.replace(',', ' ').split()
+        if parts[0].lower() == '.equ':
+            EQU_DEFS[parts[1]] = parse_imm(parts[2])
+
     # Pass 1: collect labels (pseudo-instructions count as their expanded size)
     labels = {}
     addr = 0
     for raw in lines:
         line = raw.split('#')[0].strip()
         if not line: continue
+        if line.startswith('.'): continue
         if ':' in line:
             lab, _, rest = line.partition(':')
             labels[lab.strip()] = addr
@@ -174,6 +244,7 @@ def assemble(lines):
     for raw in lines:
         line = raw.split('#')[0].strip()
         if not line: continue
+        if line.startswith('.'): continue
         if ':' in line:
             _, _, rest = line.partition(':')
             line = rest.strip()
@@ -227,6 +298,10 @@ def assemble(lines):
             rd = parse_reg(ops[0])
             imm = parse_imm(ops[1])
             word = enc_upper(mnem, rd, imm)
+        elif mnem in SYSTEM or mnem in {'csrr','csrw','csrs','csrc'}:
+            word = encode_system(mnem, ops)
+        elif mnem == '.equ':
+            pass  # handled in pre-pass
         elif mnem == 'nop':
             word = enc_ialu('addi', 0, 0, 0)
         else:

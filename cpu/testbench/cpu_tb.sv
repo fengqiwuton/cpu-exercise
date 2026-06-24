@@ -33,11 +33,10 @@ module cpu_tb;
         #100000;
 
         // Debug: dump key memory locations
-        $display("DEBUG mem[0]=%h, mem[1]=%h", dut.u_data_mem.mem[0], dut.u_data_mem.mem[1]);
-        $display("DEBUG mem[2]=%h (expect 13=0d)", dut.u_data_mem.mem[2]);
-        $display("DEBUG mem[16]=%h, mem[17]=%h", dut.u_data_mem.mem[16], dut.u_data_mem.mem[17]);
-        $display("DEBUG mem[32]=%h, mem[33]=%h", dut.u_data_mem.mem[32], dut.u_data_mem.mem[33]);
-        $display("DEBUG mem[64]=%h, mem[65]=%h", dut.u_data_mem.mem[64], dut.u_data_mem.mem[65]);
+        $display("DEBUG mem[4]=%h (csr: ecall marker)", dut.u_data_mem.mem[4]);
+        $display("DEBUG mem[5]=%h (csr: mcause)", dut.u_data_mem.mem[5]);
+        $display("DEBUG mem[6]=%h (csr: mstatus)", dut.u_data_mem.mem[6]);
+        $display("DEBUG mem[8]=%h (csr: ret value)", dut.u_data_mem.mem[8]);
 
         // Detect which test ran by checking RESULT addresses
         // (not initial data, since data.hex preloads all regions)
