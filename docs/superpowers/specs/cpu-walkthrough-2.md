@@ -271,3 +271,102 @@ vvp simv
 # 波形
 gtkwave dump.vcd
 ```
+
+---
+
+## 九、Bootloader — 运行时程序加载
+
+### 架构
+
+```
+Boot ROM (0x0000-0x0FFF)         Program BRAM (0x1000-0x1FFF)
+┌─────────────────────┐          ┌─────────────────────┐
+│ 引导程序（固定烧录）   │   sw指令  │ 双端口可写            │
+│ 1. 等 UART RX 数据    │ ──────→  │ CPU 从这里取指执行     │
+│ 2. 写入 BRAM          │   MMIO   │                     │
+│ 3. jalr 跳转          │          │                     │
+└─────────────────────┘          └─────────────────────┘
+```
+
+像真的 CPU 一样：换程序 = PC 发新 hex，不用重综合硬件。
+
+### MMIO 地址映射
+
+| 地址 | 外设 |
+|------|------|
+| `0x4000_0000` | UART TX/RX/STATUS/BAUD |
+| `0x4000_0030` | PS/2 键盘数据 |
+| `0x4000_1000` | BRAM 写入（引导程序用） |
+| `0x4000_2000` | VGA 帧缓存 (80×60×8bit) |
+
+### 引导程序使用
+
+```bash
+# 1. 汇编引导程序（只需做一次）
+python3 tools/assembler.py tools/bootloader.asm -o build/bootloader.hex
+
+# 2. C 程序 → hex → bin
+riscv-none-elf-gcc ... -o build/myprog.elf -lgcc
+python3 tools/elf2hex.py build/myprog.elf --code build/myprog.hex ...
+python3 tools/hex2bin.py build/myprog.hex prog.bin
+
+# 3. 仿真（引导程序自动从 UART 加载 prog.bin）
+iverilog -g2012 -DBOOT_HEX='"build/bootloader.hex"' -o simv rtl/*.sv testbench/boot_tb.sv
+vvp simv
+```
+
+---
+
+## 十、VGA 帧缓存 + PS/2 键盘
+
+### VGA 帧缓存 (vga_fb.sv)
+
+- 80×60 像素，每像素 8-bit 颜色 (RRRGGGBB)
+- 640×480@60Hz VGA 信号，3×3 像素放大
+- CPU 通过 MMIO 写像素：`*(0x40002000 + y*80 + x) = color`
+
+颜色定义：
+```c
+#define BLACK   0x00
+#define WHITE   0xFF
+#define RED     0xE0
+#define GREEN   0x1C
+#define BLUE    0x03
+```
+
+### PS/2 键盘 (ps2_kbd.sv)
+
+- 接收 PS/2 扫描码，转存到 MMIO 寄存器
+- 轮询：读 `0x40000034`，bit0=1 表示有按键
+- 读数据：读 `0x40000030`，返回 8-bit 扫描码
+
+### 蛇游戏 C 代码适配（示意）
+
+```c
+volatile unsigned char *fb = (unsigned char*)0x40002000;
+
+void draw_pixel(int x, int y, unsigned char color) {
+    fb[y * 80 + x] = color;
+}
+```
+
+---
+
+## 十一、当前硬件模块清单
+
+| 文件 | 功能 |
+|------|------|
+| `pc.sv` | 程序计数器 |
+| `insn_mem.sv` | 指令 BRAM（双端口，端口B可写） |
+| `boot_rom.sv` | 引导 ROM（固定，地址0） |
+| `regfile.sv` | 寄存器堆 |
+| `alu.sv` | ALU（10种运算） |
+| `data_mem.sv` | 数据存储器 |
+| `imm_gen.sv` | 立即数生成 |
+| `control.sv` | 控制单元（37条指令） |
+| `baud_gen.sv` | 波特率分频 |
+| `uart.sv` | UART TX+RX |
+| `vga_fb.sv` | VGA 帧缓存 + 控制器 |
+| `ps2_kbd.sv` | PS/2 键盘接口 |
+| `cpu_top.sv` | 顶层 + MMIO 路由 + 指令来源切换 |
+```
