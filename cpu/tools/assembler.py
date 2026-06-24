@@ -1,213 +1,192 @@
 #!/usr/bin/env python3
-"""Minimal RV32I assembler for the CPU project.
+"""Full RV32I assembler for the CPU project. Supports all 37 base integer instructions."""
+import sys, argparse, re
 
-Supports: add, sub, and, or, lw, sw, beq, blt, bge, bltu, bgeu
-Registers: x0-x31
-Labels: alphanumeric identifiers ending with ':'
-Comments: '#' to end of line
-"""
-
-import sys
-import os
-import re
-
-# ── opcode / funct ──────────────────────────────────────────────────
+# ── opcodes ──────────────────────────────────────────────────
 OP_RTYPE  = 0b0110011
+OP_IALU   = 0b0010011
 OP_LOAD   = 0b0000011
 OP_STORE  = 0b0100011
 OP_BRANCH = 0b1100011
+OP_JAL    = 0b1101111
+OP_JALR   = 0b1100111
+OP_LUI    = 0b0110111
+OP_AUIPC  = 0b0010111
 
+# ── funct3 ──────────────────────────────────────────────────
 F3 = {
-    'add':  0b000, 'sub':  0b000, 'and':  0b111, 'or':   0b110,
-    'lw':   0b010, 'sw':   0b010,
-    'beq':  0b000, 'blt':  0b100, 'bge':  0b101, 'bltu': 0b110, 'bgeu': 0b111,
+    'add':0,'sub':0,'addi':0,
+    'sll':1,'slli':1,
+    'slt':2,'slti':2,
+    'sltu':3,'sltiu':3,
+    'xor':4,'xori':4,
+    'srl':5,'srli':5,'sra':5,'srai':5,
+    'or':6,'ori':6,
+    'and':7,'andi':7,
+    'lb':0,'lh':1,'lw':2,'lbu':4,'lhu':5,
+    'sb':0,'sh':1,'sw':2,
+    'beq':0,'bne':1,'blt':4,'bge':5,'bltu':6,'bgeu':7,
 }
 
+# ── funct7 ──────────────────────────────────────────────────
 F7 = {
-    'add': 0b0000000,
-    'sub': 0b0100000,
-    'and': 0b0000000,
-    'or':  0b0000000,
+    'add':0x00,'sub':0x20,'sll':0x00,'slt':0x00,'sltu':0x00,
+    'xor':0x00,'srl':0x00,'sra':0x20,'or':0x00,'and':0x00,
+    'addi':0x00,'slli':0x00,'slti':0x00,'sltiu':0x00,
+    'xori':0x00,'srli':0x00,'srai':0x20,'ori':0x00,'andi':0x00,
 }
 
-# ── parse helpers ───────────────────────────────────────────────────
+R_INSTRS  = {'add','sub','sll','slt','sltu','xor','srl','sra','or','and'}
+I_ALU     = {'addi','slli','slti','sltiu','xori','srli','srai','ori','andi'}
+LOADS     = {'lb','lh','lw','lbu','lhu'}
+STORES    = {'sb','sh','sw'}
+BRANCHES  = {'beq','bne','blt','bge','bltu','bgeu'}
+JUMPS     = {'jal','jalr'}
+UPPERS    = {'lui','auipc'}
+
+# ── helpers ─────────────────────────────────────────────────
 def parse_reg(s):
-    """Return register number from string like 'x1' or 'x0'."""
-    assert s.startswith('x'), f"Expected register, got {s}"
-    n = int(s[1:])
-    assert 0 <= n <= 31, f"Register out of range: {s}"
-    return n
+    s = s.strip()
+    if s.startswith('x'): return int(s[1:])
+    regs = {'zero':0,'ra':1,'sp':2,'gp':3,'tp':4,
+            't0':5,'t1':6,'t2':7,'s0':8,'fp':8,'s1':9,
+            'a0':10,'a1':11,'a2':12,'a3':13,'a4':14,'a5':15,'a6':16,'a7':17,
+            's2':18,'s3':19,'s4':20,'s5':21,'s6':22,'s7':23,
+            's8':24,'s9':25,'s10':26,'s11':27,
+            't3':28,'t4':29,'t5':30,'t6':31}
+    assert s in regs, f"Unknown register: {s}"
+    return regs[s]
 
 def parse_imm(s):
-    """Parse immediate: decimal or hex (0x...)."""
     s = s.strip()
-    if s.startswith('0x') or s.startswith('0X'):
-        return int(s, 16)
-    # handle negative decimal
-    return int(s, 0)
+    if s.startswith('0x') or s.startswith('0X'): return int(s,16)
+    return int(s)
 
-def sext12(val):
-    """Sign-extend a 12-bit value to 32-bit."""
-    val = val & 0xFFF
-    if val & 0x800:
-        val |= ~0xFFF
+def parse_mem(ops):
+    """Parse 'imm(rs1)' or 'rs2, imm(rs1)' → (rs1, rs2, imm)."""
+    op = ops[-1]
+    m = re.match(r'([-]?\w+)\((\w+)\)', op)
+    assert m, f"Bad mem operand: {op}"
+    return parse_reg(m.group(2)), parse_imm(m.group(1))
+
+def imm_mask(val, bits, signed=False):
+    """Truncate + optionally sign-extend."""
+    mask = (1 << bits) - 1
+    val = val & mask
+    if signed and (val >> (bits - 1)):
+        val |= ~mask
     return val
 
-# ── encode functions ────────────────────────────────────────────────
-def encode_rtype(mnem, rd, rs1, rs2):
-    funct7 = F7[mnem]
-    funct3 = F3[mnem]
-    return (funct7 << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | OP_RTYPE
+# ── encoders ────────────────────────────────────────────────
+def enc_r(mnem, rd, rs1, rs2):
+    return (F7[mnem] << 25) | (rs2 << 20) | (rs1 << 15) | (F3[mnem] << 12) | (rd << 7) | OP_RTYPE
 
-def encode_itype(rd, rs1, imm):
-    """lw rd, imm(rs1)"""
-    imm12 = sext12(imm) & 0xFFF
-    return (imm12 << 20) | (rs1 << 15) | (F3['lw'] << 12) | (rd << 7) | OP_LOAD
+def enc_ialu(mnem, rd, rs1, imm):
+    if mnem in ('slli','srli','srai'):
+        upper = ((F7[mnem] << 5) | (imm & 0x1F)) & 0xFFF
+    else:
+        upper = imm & 0xFFF
+    return (upper << 20) | (rs1 << 15) | (F3[mnem] << 12) | (rd << 7) | OP_IALU
 
-def encode_stype(rs2, rs1, imm):
-    """sw rs2, imm(rs1)"""
-    imm12 = sext12(imm) & 0xFFF
-    imm_11_5 = (imm12 >> 5) & 0x7F
-    imm_4_0  = imm12 & 0x1F
-    return (imm_11_5 << 25) | (rs2 << 20) | (rs1 << 15) | (F3['sw'] << 12) | (imm_4_0 << 7) | OP_STORE
+def enc_load(mnem, rd, rs1, imm):
+    return ((imm & 0xFFF) << 20) | (rs1 << 15) | (F3[mnem] << 12) | (rd << 7) | OP_LOAD
 
-def encode_btype(mnem, rs1, rs2, offset):
-    """Branch: offset is byte offset from PC (must be even)."""
-    assert offset % 2 == 0, f"Branch offset must be even, got {offset}"
-    # 13-bit signed offset (bit 0 is always 0 and not stored)
-    off = offset
-    # Extract bits for RV32I B-type encoding
-    # instr[31]    = imm[12]
-    # instr[30:25] = imm[10:5]
-    # instr[11:8]  = imm[4:1]
-    # instr[7]     = imm[11]
-    instr_31    = (off >> 12) & 0x1        # imm[12]
-    instr_30_25 = (off >> 5) & 0x3F        # imm[10:5]
-    instr_11_8  = (off >> 1) & 0xF         # imm[4:1]
-    instr_7     = (off >> 11) & 0x1        # imm[11]
+def enc_store(mnem, rs1, rs2, imm):
+    im = imm & 0xFFF
+    return ((im >> 5) << 25) | (rs2 << 20) | (rs1 << 15) | (F3[mnem] << 12) | ((im & 0x1F) << 7) | OP_STORE
 
-    funct3 = F3[mnem]
-    return (instr_31 << 31) | (instr_30_25 << 25) | (rs2 << 20) | (rs1 << 15) | \
-           (funct3 << 12) | (instr_11_8 << 8) | (instr_7 << 7) | OP_BRANCH
+def enc_branch(mnem, rs1, rs2, offset):
+    assert offset % 2 == 0, f"Branch offset must be even"
+    return (((offset >> 12) & 1) << 31) | (((offset >> 5) & 0x3F) << 25) | \
+           (rs2 << 20) | (rs1 << 15) | (F3[mnem] << 12) | \
+           (((offset >> 1) & 0xF) << 8) | (((offset >> 11) & 1) << 7) | OP_BRANCH
 
-# ── parsing a single instruction line ───────────────────────────────
-def parse_instruction(line):
-    """Return (label_or_None, mnem_or_None, operands_list_or_None)."""
-    line = line.strip()
-    # remove comment
-    if '#' in line:
-        line = line[:line.index('#')]
-    line = line.strip()
-    if not line:
-        return None, None, None  # empty line
+def enc_jal(rd, offset):
+    """J-type: 21-bit signed offset, bit 0 = 0."""
+    return (((offset >> 20) & 1) << 31) | (((offset >> 1) & 0x3FF) << 21) | \
+           (((offset >> 11) & 1) << 20) | (((offset >> 12) & 0xFF) << 12) | \
+           (rd << 7) | OP_JAL
 
-    label = None
-    # label?
-    if ':' in line:
-        parts = line.split(':', 1)
-        label = parts[0].strip()
-        rest = parts[1].strip()
-        if not rest:
-            return label, None, None  # label only
-        line = rest
+def enc_jalr(rd, rs1, imm):
+    return ((imm & 0xFFF) << 20) | (rs1 << 15) | (0 << 12) | (rd << 7) | OP_JALR
 
-    # tokenize
-    # Replace commas with spaces for splitting
-    line = line.replace(',', ' ')
-    tokens = line.split()
-    if not tokens:
-        return label, None, None
+def enc_upper(mnem, rd, imm):
+    """LUI/AUIPC: imm = 20-bit upper immediate, stored in instr[31:12]."""
+    return (imm & 0xFFFFF) << 12 | (rd << 7) | (OP_LUI if mnem == 'lui' else OP_AUIPC)
 
-    mnem = tokens[0].lower()
-    operands = tokens[1:] if len(tokens) > 1 else []
-    return label, mnem, operands
-
-# ── assemble ────────────────────────────────────────────────────────
+# ── assemble ────────────────────────────────────────────────
 def assemble(lines):
-    """Two-pass assembler. Returns list of 32-bit instruction words."""
-    # Pass 1: collect labels and instructions
-    instructions = []  # (addr, mnem, operands)
-    labels = {}        # label -> address
-
+    # Pass 1: labels
+    instrs, labels = [], {}
     addr = 0
-    for line in lines:
-        label, mnem, ops = parse_instruction(line)
-        if label:
-            labels[label] = addr
-        if mnem:
-            instructions.append((addr, mnem, ops))
-            addr += 4
+    for raw in lines:
+        line = raw.split('#')[0].strip()
+        if not line: continue
+        if ':' in line:
+            lab, _, rest = line.partition(':')
+            labels[lab.strip()] = addr
+            line = rest.strip()
+            if not line: continue
+        parts = line.replace(',', ' ').split()
+        instrs.append((addr, parts[0].lower(), parts[1:]))
+        addr += 4
 
     # Pass 2: encode
-    encoded = []
-    for addr, mnem, ops in instructions:
-        if mnem in ('add', 'sub', 'and', 'or'):
-            assert len(ops) == 3, f"R-type needs 3 operands, got {ops}"
-            rd  = parse_reg(ops[0])
-            rs1 = parse_reg(ops[1])
-            rs2 = parse_reg(ops[2])
-            word = encode_rtype(mnem, rd, rs1, rs2)
-
-        elif mnem == 'lw':
-            # lw rd, imm(rs1)
-            assert len(ops) == 2, f"lw needs 2 operands, got {ops}"
+    code = []
+    for addr, mnem, ops in instrs:
+        if mnem in R_INSTRS:
+            word = enc_r(mnem, parse_reg(ops[0]), parse_reg(ops[1]), parse_reg(ops[2]))
+        elif mnem in I_ALU:
+            rd, rs1, imm = parse_reg(ops[0]), parse_reg(ops[1]), parse_imm(ops[2])
+            if mnem in ('slli','srli','srai'):
+                imm = imm & 0x1F  # shift amount is 5 bits
+            word = enc_ialu(mnem, rd, rs1, imm)
+        elif mnem in LOADS:
             rd = parse_reg(ops[0])
-            # parse offset(rs1)
-            m = re.match(r'([-]?\d+|0x[0-9a-fA-F]+)\(x(\d+)\)', ops[1])
-            assert m, f"lw operand format: offset(rs1), got {ops[1]}"
-            imm = parse_imm(m.group(1))
-            rs1 = int(m.group(2))
-            word = encode_itype(rd, rs1, imm)
-
-        elif mnem == 'sw':
-            # sw rs2, imm(rs1)
-            assert len(ops) == 2, f"sw needs 2 operands, got {ops}"
+            rs1, imm = parse_mem(ops[1:])
+            word = enc_load(mnem, rd, rs1, imm)
+        elif mnem in STORES:
             rs2 = parse_reg(ops[0])
-            m = re.match(r'([-]?\d+|0x[0-9a-fA-F]+)\(x(\d+)\)', ops[1])
-            assert m, f"sw operand format: offset(rs1), got {ops[1]}"
-            imm = parse_imm(m.group(1))
-            rs1 = int(m.group(2))
-            word = encode_stype(rs2, rs1, imm)
-
-        elif mnem in ('beq', 'blt', 'bge', 'bltu', 'bgeu'):
-            # branch rs1, rs2, label
-            assert len(ops) == 3, f"Branch needs 3 operands, got {ops}"
-            rs1 = parse_reg(ops[0])
-            rs2 = parse_reg(ops[1])
-            label = ops[2]
-            assert label in labels, f"Undefined label: {label}"
-            target = labels[label]
-            offset = target - addr
-            word = encode_btype(mnem, rs1, rs2, offset)
-
+            rs1, imm = parse_mem(ops[1:])
+            word = enc_store(mnem, rs1, rs2, imm)
+        elif mnem in BRANCHES:
+            rs1, rs2 = parse_reg(ops[0]), parse_reg(ops[1])
+            tgt = ops[2]
+            if tgt in labels: offset = labels[tgt] - addr
+            else: offset = parse_imm(tgt)
+            word = enc_branch(mnem, rs1, rs2, offset)
+        elif mnem == 'jal':
+            rd = parse_reg(ops[0])
+            tgt = ops[1]
+            if tgt in labels: offset = labels[tgt] - addr
+            else: offset = parse_imm(tgt)
+            word = enc_jal(rd, offset)
+        elif mnem == 'jalr':
+            rd = parse_reg(ops[0])
+            if '(' in str(ops[1:]):
+                rs1, imm = parse_mem(ops[1:])
+            else:
+                rs1 = parse_reg(ops[1])
+                imm = parse_imm(ops[2]) if len(ops) > 2 else 0
+            word = enc_jalr(rd, rs1, imm)
+        elif mnem in UPPERS:
+            rd = parse_reg(ops[0])
+            imm = parse_imm(ops[1])
+            word = enc_upper(mnem, rd, imm)
+        elif mnem == 'nop':
+            word = enc_ialu('addi', 0, 0, 0)
         else:
-            raise ValueError(f"Unknown mnemonic: {mnem}")
+            raise ValueError(f"Unknown instruction at 0x{addr:08x}: {mnem}")
+        code.append(word)
+    return code
 
-        encoded.append(word)
-
-    return encoded
-
-# ── main ────────────────────────────────────────────────────────────
 def main():
-    import argparse
-    parser = argparse.ArgumentParser(description='RV32I subset assembler')
-    parser.add_argument('input', help='Assembly source file')
-    parser.add_argument('-o', '--output', help='Output hex file')
-    args = parser.parse_args()
+    p = argparse.ArgumentParser()
+    p.add_argument('input'); p.add_argument('-o','--output')
+    a = p.parse_args()
+    with open(a.input, encoding='utf-8') as f: words = assemble(f.readlines())
+    out = a.output or a.input.rsplit('.',1)[0] + '.hex'
+    with open(out,'w',encoding='utf-8') as f: f.write('\n'.join(f'{w:08X}' for w in words) + '\n')
+    print(f"{a.input} -> {out} ({len(words)} instrs)")
 
-    with open(args.input, 'r') as f:
-        lines = f.readlines()
-
-    words = assemble(lines)
-
-    if args.output:
-        with open(args.output, 'w') as f:
-            for w in words:
-                f.write(f'{w:08X}\n')
-        print(f"Assembled {len(words)} instructions -> {args.output}")
-    else:
-        for w in words:
-            print(f'{w:08X}')
-
-if __name__ == '__main__':
-    main()
+if __name__ == '__main__': main()

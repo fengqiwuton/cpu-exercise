@@ -2,6 +2,7 @@
 
 module cpu_tb;
     logic clk, rst_n;
+    logic uart_rx_pin = 1'b1;  // idle, no RX input for unit tests
     cpu_top dut (.*);
 
     always #5 clk = ~clk;
@@ -28,8 +29,8 @@ module cpu_tb;
         rst_n = 0;
         #10 rst_n = 1;
 
-        // Enough cycles for the longest test (test3: 22 instrs)
-        #600;
+        // Enough cycles for UART hello test (12 chars × 100cyc)
+        #100000;
 
         // Debug: dump key memory locations
         $display("DEBUG mem[0]=%h, mem[1]=%h", dut.u_data_mem.mem[0], dut.u_data_mem.mem[1]);
@@ -76,6 +77,36 @@ module cpu_tb;
             $display("=== test4_integration results ===");
             check_mem(32'h120, 32'd15, "sum 1+2+3+4+5 = 15");
             check_mem(32'h130, 32'd15, "pass marker (beq worked)");
+        end
+
+        // test5_rv32i: mem[4] (=byte 16) stores addi result 12
+        if (dut.u_data_mem.mem[4] == 32'd12) begin
+            $display("=== test5_rv32i results ===");
+            check_mem(32'h10, 32'd12, "addi: 5+7=12");
+            check_mem(32'h14, 32'd1,  "slti: 10<20 -> 1");
+            check_mem(32'h18, 32'd0,  "slti: 10<5 -> 0");
+            check_mem(32'h1C, 32'd1,  "sltiu: 10<20 -> 1");
+            check_mem(32'h20, 32'd245, "xori: 10^255=245");
+            check_mem(32'h24, 32'd250, "ori: 10|240=250");
+            check_mem(32'h28, 32'd10, "andi: 10&15=10");
+            check_mem(32'h2C, 32'd16, "slli: 1<<4=16");
+            check_mem(32'h30, 32'hFFFF_FFC0, "srai: -256>>>2");
+            check_mem(32'h34, 32'd16, "srli: 256>>4=16");
+            check_mem(32'h38, 32'd1,  "slt: 5<10 -> 1");
+            check_mem(32'h3C, 32'd0,  "sltu: 10<5 -> 0");
+            check_mem(32'h40, 32'd15, "xor: 5^10=15");
+            check_mem(32'h44, 32'd5120, "sll: 5<<10=5120");
+            check_mem(32'h48, 32'd0,  "srl: 10>>5=0");
+            check_mem(32'h4C, 32'h1234_5000, "lui: 0x12345000");
+            check_mem(32'h54, 32'd5,  "bne taken");
+            check_mem(32'h58, 32'd10, "bne NOT taken");
+            check_mem(32'h60, 32'hFFFF_FFAB, "lb: sext(0xAB)");
+            check_mem(32'h64, 32'hAB, "lbu: 0xAB");
+            check_mem(32'h68, 32'h5678, "lh: 0x5678");
+            check_mem(32'h6C, 32'h5678, "lhu: 0x5678");
+            check_mem(32'h74, 32'h42, "sb: 0x42");
+            check_mem(32'h7C, 32'h7AB, "sh: 0x7AB");
+            check_mem(32'h80, 32'h42, "jal/jalr: x22=0x42");
         end
 
         $display("Simulation finished.");
