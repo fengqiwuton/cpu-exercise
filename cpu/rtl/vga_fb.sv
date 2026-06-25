@@ -20,7 +20,11 @@ module vga_fb #(
     output logic [3:0]  vga_g,
     output logic [3:0]  vga_b,
     output logic        vga_hsync,
-    output logic        vga_vsync
+    output logic        vga_vsync,
+
+    // Debug read port (for Verilator)
+    input  logic [12:0] dbg_addr,
+    output logic [7:0]  dbg_data
 );
     // ── Pixel clock divider (100MHz / 4 = 25MHz) ──────────
     logic [1:0] clk_div;
@@ -41,9 +45,19 @@ module vga_fb #(
     logic [7:0] fb [0:FB_SIZE-1];
     integer     i;
 
-    // CPU write (synchronous)
-    logic [12:0] fb_wr_addr;
-    assign fb_wr_addr = addr[12:0]; // up to 8KB
+    // CPU write with stride remapping
+    // Old game code writes at stride-40 within a 40×30 grid but the
+    // framebuffer is 80 wide.  Remap: row*40+col → row*80+col
+    // Only remap writes inside the 40×30 logical area (addr < 1200).
+    // Writes >= 1200 (e.g. bottom-border at FW=80) pass through unchanged.
+    logic [31:0] fb_wr_off;   // zero-extended offset
+    logic [31:0] fb_wr_row, fb_wr_col;
+    assign fb_wr_off = {19'b0, addr[12:0]};
+    assign fb_wr_row = fb_wr_off / 32'd40;
+    assign fb_wr_col = fb_wr_off % 32'd40;
+    wire [31:0] remap_addr = fb_wr_row * 32'd80 + fb_wr_col;
+    wire [12:0] fb_wr_addr = (fb_wr_off < 32'd1200) ? remap_addr[12:0] : addr[12:0];
+
     always_ff @(posedge clk) begin
         if (cs && mem_write && fb_wr_addr < FB_SIZE)
             fb[fb_wr_addr] <= write_data[7:0];
@@ -90,4 +104,7 @@ module vga_fb #(
     assign vga_r = h_visible && v_visible ? {pixel[7:5], 1'b0} : 4'h0;
     assign vga_g = h_visible && v_visible ? {pixel[4:2], 1'b0} : 4'h0;
     assign vga_b = h_visible && v_visible ? {pixel[1:0], 2'b00} : 4'h0;
+    // Debug read port for Verilator
+    assign dbg_data = (dbg_addr < FB_SIZE) ? fb[dbg_addr] : 8'h00;
+
 endmodule

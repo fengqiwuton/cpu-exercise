@@ -7,7 +7,10 @@ module cpu_top #(
     input logic uart_rx_pin,
     output logic uart_tx_pin,
     output logic [7:0] uart_tx_byte,
-    output logic        uart_tx_strobe
+    output logic        uart_tx_strobe,
+    // VGA debug read port
+    input  logic [12:0] vga_dbg_addr,
+    output logic [7:0]  vga_dbg_data
 );
     logic [31:0] pc, next_pc, pc_plus_4, branch_target;
     logic        pc_src;
@@ -159,7 +162,9 @@ module cpu_top #(
         .write_data(store_data),
         .mem_write(mem_write && vga_sel),
         .vga_r(), .vga_g(), .vga_b(),
-        .vga_hsync(), .vga_vsync()
+        .vga_hsync(), .vga_vsync(),
+        .dbg_addr(vga_dbg_addr),
+        .dbg_data(vga_dbg_data)
     );
 
     // ── CSR module ──────────────────────────────────────────

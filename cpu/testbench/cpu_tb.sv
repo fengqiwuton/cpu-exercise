@@ -6,6 +6,8 @@ module cpu_tb;
     logic uart_tx_pin;
     logic [7:0] uart_tx_byte;
     logic       uart_tx_strobe;
+    logic [12:0] vga_dbg_addr = 0;
+    logic [7:0]  vga_dbg_data;
     cpu_top dut (.*);
 
     always #5 clk = ~clk;

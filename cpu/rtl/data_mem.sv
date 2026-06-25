@@ -6,7 +6,7 @@ module data_mem #(parameter DEPTH = 2048) (
     output logic [31:0] read_data
 );
     logic [31:0] mem [0:DEPTH-1];
-    initial $readmemh("programs/data.hex", mem);
+    initial $readmemh("data.hex", mem);
     assign read_data = mem[addr[31:2]];
 
     always_ff @(posedge clk) begin
