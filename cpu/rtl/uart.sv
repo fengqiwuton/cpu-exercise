@@ -19,7 +19,11 @@ module uart #(
 
     // Physical UART pins (for real hardware)
     output logic        tx_pin,
-    input  logic        rx_pin         // In sim: tied to 1 (idle)
+    input  logic        rx_pin,
+
+    // Parallel debug output (for Verilator)
+    output logic [7:0]  tx_byte,
+    output logic        tx_strobe     // 1-cycle pulse when byte sent
 );
     // Internal registers
     logic [7:0]  tx_reg;
@@ -35,6 +39,9 @@ module uart #(
     tx_state_t tx_state;
     logic [7:0] tx_shift;
     logic       tx_busy;
+
+    assign tx_byte   = tx_shift;
+    assign tx_strobe = (tx_state == TX_STOP) && baud_tick;
 
     // RX state machine (simplified: self-synchronized counter)
     typedef enum logic { RX_IDLE, RX_DATA } rx_state_t;
@@ -87,21 +94,6 @@ module uart #(
             endcase
         end
     end
-
-    // Simulation: print TX byte, log RX receipt
-    `ifdef SIMULATION
-    always_ff @(posedge clk) begin
-        if (tx_state == TX_STOP && baud_tick)
-            $write("%c", tx_shift);
-    end
-    wire rx_done_sim;
-    assign rx_done_sim = (rx_state == RX_DATA) && (rx_bit_cnt == 4'd9)
-                         && (rx_counter == baud_div_2 + 9 * baud_div_reg);
-    always_ff @(posedge clk) begin
-        if (rx_done_sim)
-            $write("[RX:'%c']", rx_shift);
-    end
-    `endif
 
     // ── RX: free-running counter, samples at bit center ────
     wire [15:0] baud_div_2;

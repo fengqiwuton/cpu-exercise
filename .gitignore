@@ -21,3 +21,4 @@ simv.daidir/
 # 你的项目特定
 programs/*.hex
 .claude
+sim

@@ -109,7 +109,27 @@ E:\CPU\
 
 ## 下一步
 
-1. **Verilator 加速** — 仿真速度提升 100-1000×，VGA Snake 可实时运行
-2. **Vivado 上板** — EGO1 FPGA 综合，真实硬件验证
-3. **L2 Cache / 分支预测** — 性能优化方向
-4. **简单 OS** — 多任务 + 系统调用
+### Verilator 加速仿真 ✅
+
+详见 `verilator-setup.md`。
+
+- WSL Ubuntu 安装 Verilator，编译 C++ harness
+- UART 加并行字节输出 (`tx_byte` + `tx_strobe`)，避免软件串行解码
+- 蛇游戏实时交互：WASD 操控，终端渲染
+- 速度提升 ~1000× vs Icarus
+
+### Vivado 上板
+
+1. 在 Vivado 中新建工程，选 EGO1 对应的 FPGA 型号 (XC7A35T)
+2. 添加 `rtl/*.sv`（排除 `ifdef SIMULATION 块）
+3. 用 hex2coe.py 把程序转成 .coe，初始化 BRAM
+4. 加约束文件 .xdc（引脚映射：VGA/PS/2/UART/时钟/复位）
+5. 综合 → 实现 → 生成 bitstream → 下载到 EGO1
+6. 用 uart_tool.py 通过串口发程序、收输出
+
+### 未来项目
+
+1. **L2 Cache / 分支预测** — 性能优化
+2. **简单 OS** — 多任务调度 + 系统调用
+3. **图形/声音/手柄** — 多媒体外设
+4. **SD 卡** — 文件系统 + 程序存储

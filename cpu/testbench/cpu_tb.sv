@@ -2,7 +2,10 @@
 
 module cpu_tb;
     logic clk, rst_n;
-    logic uart_rx_pin = 1'b1;  // idle, no RX input for unit tests
+    logic uart_rx_pin = 1'b1;
+    logic uart_tx_pin;
+    logic [7:0] uart_tx_byte;
+    logic       uart_tx_strobe;
     cpu_top dut (.*);
 
     always #5 clk = ~clk;

@@ -1,9 +1,13 @@
+/* verilator lint_off UNOPTFLAT */
 module cpu_top #(
     parameter BOOT_EN = 0     // 1 = boot ROM mode, 0 = direct BRAM
 ) (
     input logic clk,
     input logic rst_n,
-    input logic uart_rx_pin
+    input logic uart_rx_pin,
+    output logic uart_tx_pin,
+    output logic [7:0] uart_tx_byte,
+    output logic        uart_tx_strobe
 );
     logic [31:0] pc, next_pc, pc_plus_4, branch_target;
     logic        pc_src;
@@ -132,7 +136,8 @@ module cpu_top #(
         .addr(alu_result[3:0]), .write_data(store_data),
         .mem_write(mem_write && uart_sel),
         .byte_enable, .read_data(uart_read_data),
-        .tx_pin(), .rx_pin(uart_rx_pin)
+        .tx_pin(uart_tx_pin), .rx_pin(uart_rx_pin),
+        .tx_byte(uart_tx_byte), .tx_strobe(uart_tx_strobe)
     );
 
     // ── PS/2 Keyboard ──────────────────────────────────────
