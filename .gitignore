@@ -21,4 +21,16 @@ simv.daidir/
 # 你的项目特定
 programs/*.hex
 .claude
-sim
+/sim
+
+# Heavy/generated project artifacts
+cpu/build/
+cpu/sim/obj_dir/
+cpu/sim/verilator/
+cpu/sim/*.bmp
+cpu/sim/*.ppm
+cpu/*.vcd
+cpu/*.vvp
+cpu/*_sim
+cpu/top_check
+cpu/simv*

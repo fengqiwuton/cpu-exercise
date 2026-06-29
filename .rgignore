@@ -1,0 +1,16 @@
+# Third-party tool source vendored for simulation
+cpu/sim/verilator/
+
+# Generated build and simulation outputs
+cpu/build/
+cpu/sim/obj_dir/
+cpu/*.vcd
+cpu/*.vvp
+cpu/*_sim
+cpu/top_check
+cpu/simv*
+cpu/sim/*.bmp
+cpu/sim/*.ppm
+
+# CodeGraph local database
+.codegraph/
