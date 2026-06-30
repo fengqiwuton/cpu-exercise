@@ -11,6 +11,7 @@ SRCS    = $(RTL_DIR)/pc.sv \
           $(RTL_DIR)/baud_gen.sv \
           $(RTL_DIR)/uart.sv \
           $(RTL_DIR)/vga_fb.sv \
+          $(RTL_DIR)/timer.sv \
           $(RTL_DIR)/ps2_kbd.sv \
           $(RTL_DIR)/csr.sv \
           $(RTL_DIR)/boot_rom.sv \

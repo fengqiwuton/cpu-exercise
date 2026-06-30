@@ -32,6 +32,21 @@ _start:
 li   t0, UART_BAUD
 li   t1, 20
 sw   t1, 0(t0)
+
+# Init timer
+li   t0, 0x40000044
+li   t1, 80000
+sw   t1, 0(t0)
+la   t0, isr_entry
+csrw mtvec, t0
+li   t0, 0x80
+csrw mie, t0
+li   t0, 0x8
+csrs mstatus, t0
+li   t0, 0x40000040
+li   t1, 1
+sw   t1, 0(t0)
+
 # Clear visible area (fast: 30 rows x 40 cols)
 li   t3, 0
 _s0:li   t4, 30
@@ -128,7 +143,7 @@ sw zero,8(t0)
 sw   zero,20(t0)
 sw zero,24(t0)
 li   t1,12345
-sw t1,16(t0)
+sw   t1,16(t0)
 # Body: (10..6, 30)
 li   t2,5
 li t3,10
@@ -158,6 +173,19 @@ lw t0,0(t0)
 lw sp,0(t0)
 lw ra,4(t0)
 ret
+
+# ═══════════════ isr_entry ══════════════════════
+isr_entry:
+# Minimal ISR: just bump a counter and clear IRQ
+li   t0, COUNTER_VAL
+lw   t1, 0(t0)
+addi t1, t1, 1
+sw   t1, 0(t0)
+li   t0, 0x40000040
+li   t1, 2
+sw   t1, 0(t0)
+mret
+
 # ═══════════════ yield ══════════════════════════
 yield:
 li   t0,CUR_TASK
@@ -197,7 +225,7 @@ lw s7,36(t2)
 lw s8,40(t2)
 lw s9,44(t2)
 lw   s10,48(t2)
-lw s11,52(t2)
+lw   s11,52(t2)
 ret
 # ═══════════════ draw_pixel ════════════════════
 draw_pixel:
@@ -235,14 +263,20 @@ ret
 # ═══════════════ rand ══════════════════════════
 rand:
 li   t0,SNAKE_RNG
-lw a0,0(t0)
+lw   a0,0(t0)
+# Mix in head position for non-deterministic sequence
+lw   t1,0(s0)               # sx[0] (head x)
+xor  a0,a0,t1
+lw   t1,0(s1)               # sy[0] (head y)
+xor  a0,a0,t1
+# xorshift
 slli t1,a0,13
-xor a0,a0,t1
+xor  a0,a0,t1
 srli t1,a0,17
-xor a0,a0,t1
+xor  a0,a0,t1
 slli t1,a0,5
-xor a0,a0,t1
-sw a0,0(t0)
+xor  a0,a0,t1
+sw   a0,0(t0)
 ret
 # ═══════════════ TASK A: blink dot ═══════════════
 task_counter:
@@ -392,19 +426,17 @@ addi t1,t1,10
 sw t1,0(t0)
 # New food
 jal  ra,rand
-mv t0,a0
-li t1,68
-_sfx:blt  t0,t1,_sfxd
-sub t0,t0,t1
-j _sfx
+andi t0,a0,0x7F
+li   t1,68
+blt  t0,t1,_sfxd
+sub  t0,t0,t1
 _sfxd:addi t0,t0,5
 sw t0,0(s5)
 jal  ra,rand
-mv t0,a0
-li t1,48
-_sfy:blt  t0,t1,_sfyd
-sub t0,t0,t1
-j _sfy
+andi t0,a0,0x7F
+li   t1,48
+blt  t0,t1,_sfyd
+sub  t0,t0,t1
 _sfyd:addi t0,t0,5
 sw t0,0(s6)
 _snof:

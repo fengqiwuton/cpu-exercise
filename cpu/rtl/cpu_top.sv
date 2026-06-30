@@ -57,6 +57,9 @@ module cpu_top #(
     logic        uart_sel;
     logic        bram_sel;
     logic        vga_sel;
+    logic        timer_sel;
+    logic        timer_irq;
+    logic [31:0] timer_read_data;
     logic        ps2_sel;
     logic [31:0] ps2_read_data;
 
@@ -84,6 +87,8 @@ module cpu_top #(
     assign instr = boot_sel ? boot_instr : bram_instr;
 
     // ── Decode ─────────────────────────────────────────────
+    wire ctrl_exception;
+    wire [3:0] ctrl_except_cause;
     control u_control (
         .opcode(instr[6:0]), .funct3(instr[14:12]), .funct7(instr[31:25]),
         .funct12(instr[31:20]),
@@ -91,8 +96,11 @@ module cpu_top #(
         .branch, .jump, .lui_sel, .auipc_sel,
         .load_ext, .store_type, .alu_control,
         .csr_read, .csr_write, .csr_op, .csr_imm_sel,
-        .ecall_flag, .mret_flag, .exception, .except_cause
+        .ecall_flag, .mret_flag,
+        .exception(ctrl_exception), .except_cause(ctrl_except_cause)
     );
+    assign exception   = ctrl_exception | timer_irq;
+    assign except_cause = timer_irq ? 4'd7 : ctrl_except_cause;
 
     regfile u_regfile (
         .clk, .rs1_addr(instr[19:15]), .rs2_addr(instr[24:20]),
@@ -110,7 +118,8 @@ module cpu_top #(
     assign uart_sel = io_sel && (alu_result[15:12] == 4'h0) && (alu_result[5:4] == 2'd0);
     assign ps2_sel  = io_sel && (alu_result[15:12] == 4'h0) && (alu_result[5:4] == 2'd3);
     assign bram_sel = io_sel && (alu_result[15:12] == 4'h1);
-    assign vga_sel  = io_sel && (alu_result[15:12] == 4'h2);
+    assign vga_sel   = io_sel && (alu_result[15:12] == 4'h2);
+    assign timer_sel = io_sel && (alu_result[15:12] == 4'h0) && (alu_result[5:4] == 2'd1);
 
     // ── Byte enables ───────────────────────────────────────
     always_comb begin
@@ -167,6 +176,17 @@ module cpu_top #(
         .dbg_data(vga_dbg_data)
     );
 
+    // ── Timer ──────────────────────────────────────────────
+    timer u_timer (
+        .clk, .rst_n,
+        .cs(timer_sel),
+        .addr(alu_result),
+        .write_data(store_data),
+        .mem_write(mem_write && timer_sel),
+        .read_data(timer_read_data),
+        .irq(timer_irq)
+    );
+
     // ── CSR module ──────────────────────────────────────────
     assign csr_wdata = csr_imm_sel ? {27'b0, instr[19:15]} : rs1_data;
 
@@ -185,8 +205,9 @@ module cpu_top #(
         .mret_taken()
     );
 
-    assign bus_read_data = uart_sel ? uart_read_data :
-                           ps2_sel  ? ps2_read_data :
+    assign bus_read_data = uart_sel   ? uart_read_data :
+                           ps2_sel    ? ps2_read_data :
+                           timer_sel  ? timer_read_data :
                            mem_read_data;
 
     // ── Load extension ─────────────────────────────────────
