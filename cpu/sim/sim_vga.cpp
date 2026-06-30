@@ -7,10 +7,10 @@
 #include <SDL2/SDL.h>
 
 static const int BAUD     = 20;
-static const int HW_W     = 80;   // hardware framebuffer stride (after remap)
-static const int GAME_W   = 40;   // game visible width
-static const int GAME_H   = 30;   // game visible height
-static const int SCALE    = 16;   // 40×16=640, 30×16=480
+static const int HW_W     = 80;   // hardware framebuffer stride
+static const int GAME_W   = 80;   // full 80-wide framebuffer
+static const int GAME_H   = 60;   // full 60-tall framebuffer
+static const int SCALE    = 8;    // 80×8=640, 60×8=480
 static const int WIN_W    = GAME_W * SCALE;
 static const int WIN_H    = GAME_H * SCALE;
 static const int BOOT_CYCLES    = 0;      // no separate boot, render from cycle 0
@@ -171,6 +171,7 @@ int main(int argc, char **argv) {
         SDL_UpdateTexture(tex, NULL, fb_pixels, GAME_W * 4);
         SDL_RenderCopy(ren, tex, NULL, NULL);
         SDL_RenderPresent(ren);
+        SDL_Delay(150);  // throttle: ~6 fps, playable snake speed
     }
 
     SDL_DestroyTexture(tex);
