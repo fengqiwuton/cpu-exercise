@@ -58,92 +58,11 @@ module vga_fb #(
         for (i = 1; i < 29; i++) fb[i*80 + 39] = 8'hFF;
     end
 
-    // CPU write with stride remapping
-    // Old game code writes at stride-40 within a 40×30 grid but the
-    // framebuffer is 80 wide.  Remap: row*40+col → row*80+col
-    // Formula: remap = addr + row*40  (since row*80+col = row*40+col + row*40)
-    // Uses lookup tables to avoid ALL multiplication/division hardware.
-    logic [31:0] fb_wr_off;
-    logic [31:0] fb_wr_row;
-    logic [31:0] row_extra;   // = row * 40  (lookup, not multiply)
-    logic [31:0] remap_addr;
+    // CPU write — direct pass-through (no stride remapping)
+    // New code uses stride-80 natively; remapping was only needed for
+    // old hex files compiled with stride-40.
     logic [12:0] fb_wr_addr;
-    assign fb_wr_off = {19'b0, addr[12:0]};
-
-    // Row detection: addr / 40 using threshold comparison
-    always_comb begin
-        if      (fb_wr_off <  40) fb_wr_row = 0;
-        else if (fb_wr_off <  80) fb_wr_row = 1;
-        else if (fb_wr_off < 120) fb_wr_row = 2;
-        else if (fb_wr_off < 160) fb_wr_row = 3;
-        else if (fb_wr_off < 200) fb_wr_row = 4;
-        else if (fb_wr_off < 240) fb_wr_row = 5;
-        else if (fb_wr_off < 280) fb_wr_row = 6;
-        else if (fb_wr_off < 320) fb_wr_row = 7;
-        else if (fb_wr_off < 360) fb_wr_row = 8;
-        else if (fb_wr_off < 400) fb_wr_row = 9;
-        else if (fb_wr_off < 440) fb_wr_row = 10;
-        else if (fb_wr_off < 480) fb_wr_row = 11;
-        else if (fb_wr_off < 520) fb_wr_row = 12;
-        else if (fb_wr_off < 560) fb_wr_row = 13;
-        else if (fb_wr_off < 600) fb_wr_row = 14;
-        else if (fb_wr_off < 640) fb_wr_row = 15;
-        else if (fb_wr_off < 680) fb_wr_row = 16;
-        else if (fb_wr_off < 720) fb_wr_row = 17;
-        else if (fb_wr_off < 760) fb_wr_row = 18;
-        else if (fb_wr_off < 800) fb_wr_row = 19;
-        else if (fb_wr_off < 840) fb_wr_row = 20;
-        else if (fb_wr_off < 880) fb_wr_row = 21;
-        else if (fb_wr_off < 920) fb_wr_row = 22;
-        else if (fb_wr_off < 960) fb_wr_row = 23;
-        else if (fb_wr_off < 1000) fb_wr_row = 24;
-        else if (fb_wr_off < 1040) fb_wr_row = 25;
-        else if (fb_wr_off < 1080) fb_wr_row = 26;
-        else if (fb_wr_off < 1120) fb_wr_row = 27;
-        else if (fb_wr_off < 1160) fb_wr_row = 28;
-        else                      fb_wr_row = 29;
-    end
-
-    // row_extra = row * 40  (lookup table, zero multiplication)
-    always_comb begin
-        case (fb_wr_row)
-            0:  row_extra = 0;
-            1:  row_extra = 40;
-            2:  row_extra = 80;
-            3:  row_extra = 120;
-            4:  row_extra = 160;
-            5:  row_extra = 200;
-            6:  row_extra = 240;
-            7:  row_extra = 280;
-            8:  row_extra = 320;
-            9:  row_extra = 360;
-            10: row_extra = 400;
-            11: row_extra = 440;
-            12: row_extra = 480;
-            13: row_extra = 520;
-            14: row_extra = 560;
-            15: row_extra = 600;
-            16: row_extra = 640;
-            17: row_extra = 680;
-            18: row_extra = 720;
-            19: row_extra = 760;
-            20: row_extra = 800;
-            21: row_extra = 840;
-            22: row_extra = 880;
-            23: row_extra = 920;
-            24: row_extra = 960;
-            25: row_extra = 1000;
-            26: row_extra = 1040;
-            27: row_extra = 1080;
-            28: row_extra = 1120;
-            29: row_extra = 1160;
-            default: row_extra = 0;
-        endcase
-    end
-
-    // remap = addr + row*40  (addition only, no multiply)
-    assign remap_addr = fb_wr_off + row_extra;
-    assign fb_wr_addr = (fb_wr_off < 32'd1200) ? remap_addr[12:0] : addr[12:0];
+    assign fb_wr_addr = addr[12:0];
 
     always_ff @(posedge clk) begin
         if (cs && mem_write && fb_wr_addr < FB_SIZE)

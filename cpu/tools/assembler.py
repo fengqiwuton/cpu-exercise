@@ -27,6 +27,8 @@ F3 = {
     'lb':0,'lh':1,'lw':2,'lbu':4,'lhu':5,
     'sb':0,'sh':1,'sw':2,
     'beq':0,'bne':1,'blt':4,'bge':5,'bltu':6,'bgeu':7,
+    'mul':0,'mulh':1,'mulhsu':2,'mulhu':3,
+    'div':4,'divu':5,'rem':6,'remu':7,
 }
 
 # ── funct7 ──────────────────────────────────────────────────
@@ -35,9 +37,12 @@ F7 = {
     'xor':0x00,'srl':0x00,'sra':0x20,'or':0x00,'and':0x00,
     'addi':0x00,'slli':0x00,'slti':0x00,'sltiu':0x00,
     'xori':0x00,'srli':0x00,'srai':0x20,'ori':0x00,'andi':0x00,
+    'mul':0x01,'mulh':0x01,'mulhu':0x01,'mulhsu':0x01,
+    'div':0x01,'divu':0x01,'rem':0x01,'remu':0x01,
 }
 
-R_INSTRS  = {'add','sub','sll','slt','sltu','xor','srl','sra','or','and'}
+R_INSTRS  = {'add','sub','sll','slt','sltu','xor','srl','sra','or','and',
+             'mul','mulh','mulhu','mulhsu','div','divu','rem','remu'}
 I_ALU     = {'addi','slli','slti','sltiu','xori','srli','srai','ori','andi'}
 LOADS     = {'lb','lh','lw','lbu','lhu'}
 STORES    = {'sb','sh','sw'}
@@ -46,7 +51,8 @@ JUMPS     = {'jal','jalr'}
 UPPERS    = {'lui','auipc'}
 SYSTEM    = {'ecall','ebreak','mret','csrrw','csrrs','csrrc','csrrwi','csrrsi','csrrci',
              'csrr','csrw','csrs','csrc'}
-PSEUDO    = {'la','nop','li','mv','call','ret','j'}  # expanded in pass 1
+PSEUDO    = {'la','nop','li','mv','call','ret','j',
+             'bnez','beqz','bltz','bgtz','bgez','blez','bgt','ble'}  # expanded in pass 1
 
 CSR_ADDR = {
     'mstatus':0x300,'mtvec':0x305,'mepc':0x341,'mcause':0x342,
@@ -70,8 +76,19 @@ def parse_reg(s):
     assert s in regs, f"Unknown register: {s}"
     return regs[s]
 
+def resolve_label(s, labels):
+    """Resolve a label reference, handling 1b/1f local label suffixes."""
+    if s in labels: return labels[s]
+    if len(s) >= 2 and s[-1] in 'bf' and s[:-1] in labels:
+        return labels[s[:-1]]
+    return None
+
 def parse_imm(s):
     s = s.strip()
+    # Handle local label references (1b, 2f) by stripping suffix
+    if len(s) >= 2 and s[-1] in 'bf' and s[:-1].isdigit():
+        s = s[:-1]
+    if s in EQU_DEFS: return EQU_DEFS[s]
     if s.startswith('0x') or s.startswith('0X'): return int(s,16)
     return int(s)
 
@@ -124,8 +141,8 @@ def enc_jalr(rd, rs1, imm):
     return ((imm & 0xFFF) << 20) | (rs1 << 15) | (0 << 12) | (rd << 7) | OP_JALR
 
 def enc_upper(mnem, rd, imm):
-    """LUI/AUIPC: imm = 20-bit upper immediate, stored in instr[31:12]."""
-    return (imm & 0xFFFFF) << 12 | (rd << 7) | (OP_LUI if mnem == 'lui' else OP_AUIPC)
+    """LUI/AUIPC: extract upper 20 bits from 32-bit immediate."""
+    return (imm & 0xFFFFF000) | (rd << 7) | (OP_LUI if mnem == 'lui' else OP_AUIPC)
 
 def enc_system(mnem, rd, rs1, imm):
     """CSR / SYSTEM instructions."""
@@ -183,16 +200,37 @@ def expand_pseudo(mnem, ops, addr, labels):
         # la rd, symbol → auipc rd, hi20 + addi rd, rd, lo12
         rd = ops[0]
         sym = ops[1]
-        if sym in labels:
-            offset = labels[sym] - addr
-        else:
-            offset = parse_imm(sym)
+        lbl_addr = resolve_label(sym, labels)
+        if lbl_addr is not None: offset = lbl_addr - addr
+        else: offset = parse_imm(sym)
         hi = (offset + 0x800) & 0xFFFFF000
         lo = offset - hi
         return [('auipc', [rd, str(hi)]), ('addi', [rd, rd, str(lo)])]
     elif mnem == 'li':
-        # li rd, imm → addi rd, x0, imm (if imm fits 12-bit)
-        return [('addi', [ops[0], 'x0', ops[1]])]
+        # li rd, imm → addi rd, x0, imm (12-bit) or lui+addi (32-bit)
+        imm = parse_imm(ops[1])
+        if -2048 <= imm < 2048:
+            return [('addi', [ops[0], 'x0', ops[1]])]
+        else:
+            hi = (imm + 0x800) & 0xFFFFF000
+            lo = imm - hi
+            return [('lui', [ops[0], str(hi)]), ('addi', [ops[0], ops[0], str(lo)])]
+    elif mnem == 'bnez':
+        return [('bne', [ops[0], 'x0', ops[1]])]
+    elif mnem == 'beqz':
+        return [('beq', [ops[0], 'x0', ops[1]])]
+    elif mnem == 'bltz':
+        return [('blt', [ops[0], 'x0', ops[1]])]
+    elif mnem == 'bgtz':
+        return [('blt', ['x0', ops[0], ops[1]])]
+    elif mnem == 'bgez':
+        return [('bge', [ops[0], 'x0', ops[1]])]
+    elif mnem == 'blez':
+        return [('bge', ['x0', ops[0], ops[1]])]
+    elif mnem == 'bgt':
+        return [('blt', [ops[1], ops[0], ops[2]])]
+    elif mnem == 'ble':
+        return [('bge', [ops[1], ops[0], ops[2]])]
     elif mnem == 'mv':
         # mv rd, rs → addi rd, rs, 0
         return [('addi', [ops[0], ops[1], '0'])]
@@ -235,8 +273,18 @@ def assemble(lines):
             if not line: continue
         parts = line.replace(',', ' ').split()
         mnem = parts[0].lower()
-        # Count expanded instruction slots (2 for la/call, 1 for others)
-        addr += 8 if mnem in ('la','call') else 4
+        # Count expanded instruction slots
+        if mnem in ('la','call'):
+            addr += 8
+        elif mnem == 'li':
+            # li with 32-bit imm expands to 2 instructions (lui+addi)
+            try:
+                val = parse_imm(parts[2]) if len(parts) > 2 else 0
+                addr += 8 if val < -2048 or val >= 2048 else 4
+            except:
+                addr += 8  # assume 2 instructions if cant parse
+        else:
+            addr += 4
 
     # Pass 2: expand + encode
     instrs = []
@@ -277,13 +325,15 @@ def assemble(lines):
         elif mnem in BRANCHES:
             rs1, rs2 = parse_reg(ops[0]), parse_reg(ops[1])
             tgt = ops[2]
-            if tgt in labels: offset = labels[tgt] - addr
+            lbl_addr = resolve_label(tgt, labels)
+            if lbl_addr is not None: offset = lbl_addr - addr
             else: offset = parse_imm(tgt)
             word = enc_branch(mnem, rs1, rs2, offset)
         elif mnem == 'jal':
             rd = parse_reg(ops[0])
             tgt = ops[1]
-            if tgt in labels: offset = labels[tgt] - addr
+            lbl_addr = resolve_label(tgt, labels)
+            if lbl_addr is not None: offset = lbl_addr - addr
             else: offset = parse_imm(tgt)
             word = enc_jal(rd, offset)
         elif mnem == 'jalr':

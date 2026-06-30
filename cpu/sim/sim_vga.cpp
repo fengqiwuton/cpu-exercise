@@ -13,10 +13,8 @@ static const int GAME_H   = 30;   // game visible height
 static const int SCALE    = 16;   // 40×16=640, 30×16=480
 static const int WIN_W    = GAME_W * SCALE;
 static const int WIN_H    = GAME_H * SCALE;
-static const int BOOT_CYCLES    = 12000; // boot: ~4 game iterations
-static const int BATCH_CYCLES   = 1500;  // small batch for fine granularity
-static const int STABLE_GAP     = 1000;  // gap to detect mid-update changes
-static const int TARGET_FPS     = 5;     // display fps: 3500*5=17500 cyc/s ≈ 5.6 moves/s
+static const int BOOT_CYCLES    = 0;      // no separate boot, render from cycle 0
+static const int BATCH_CYCLES   = 20000;  // large batch to blast through init
 
 // ── Key injector: serializes byte to UART rx_pin ────────────
 struct KeyInj {
@@ -57,7 +55,7 @@ void read_fb(Vcpu_top *top, uint32_t *buf) {
             uint32_t r = ((c >> 5) & 7) * 36;
             uint32_t g = ((c >> 2) & 7) * 36;
             uint32_t b = (c & 3) * 85;
-            buf[y*GAME_W + x] = (r << 16) | (g << 8) | b;
+            buf[y*GAME_W + x] = 0xFF000000 | (r << 16) | (g << 8) | b;
         }
     }
 }
@@ -101,7 +99,7 @@ int main(int argc, char **argv) {
     SDL_Renderer *ren = SDL_CreateRenderer(win, -1,
         SDL_RENDERER_ACCELERATED);
     SDL_Texture *tex = SDL_CreateTexture(ren,
-        SDL_PIXELFORMAT_RGB888, SDL_TEXTUREACCESS_STREAMING,
+        SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING,
         GAME_W, GAME_H);
 
     // Reset CPU
@@ -110,28 +108,33 @@ int main(int argc, char **argv) {
     top->rst_n=1;
 
     uint32_t fb_pixels[GAME_W * GAME_H];
-    uint32_t fb_check[GAME_W * GAME_H];
     int prev_strobe = 0;
 
-    // Helper: compare two framebuffer snapshots
-    auto fb_eq = [&]() -> bool {
-        for (int i = 0; i < GAME_W * GAME_H; i++)
-            if (fb_pixels[i] != fb_check[i]) return false;
-        return true;
-    };
-
-    // Boot phase
-    printf("Initializing game (%d cycles)...\n", BOOT_CYCLES);
-    run_cycles(top, inj, BOOT_CYCLES, prev_strobe);
-
-    // Show initial screen
-    read_fb(top, fb_pixels);
-    SDL_UpdateTexture(tex, NULL, fb_pixels, GAME_W * 4);
-    SDL_RenderCopy(ren, tex, NULL, NULL);
-    SDL_RenderPresent(ren);
+    // Boot phase: render as we go so user sees screen appear instantly
+    printf("Booting...\n");
+    int boot_remain = BOOT_CYCLES;
+    while (boot_remain > 0) {
+        int n = (boot_remain > 200) ? 200 : boot_remain;
+        run_cycles(top, inj, n, prev_strobe, 0);
+        read_fb(top, fb_pixels);
+        // Debug: print key pixels using 2D index (y*40+x)
+        static int dbg_cnt = 0;
+        if (dbg_cnt < 3) {
+            printf("boot %d: (0,0)=0x%08X (5,5)=0x%08X (15,14)=0x%08X (15,15)=0x%08X\n",
+                   dbg_cnt,
+                   fb_pixels[0*GAME_W+0],    // (0,0) top-left
+                   fb_pixels[5*GAME_W+5],    // (5,5)
+                   fb_pixels[15*GAME_W+14],   // (15,14) RED debug
+                   fb_pixels[15*GAME_W+15]);  // (15,15) GREEN debug
+            dbg_cnt++;
+        }
+        SDL_UpdateTexture(tex, NULL, fb_pixels, GAME_W * 4);
+        SDL_RenderCopy(ren, tex, NULL, NULL);
+        SDL_RenderPresent(ren);
+        boot_remain -= n;
+    }
     printf("Running. WASD=move, Q/Esc=quit\n");
 
-    Uint32 next_frame = SDL_GetTicks() + (1000 / TARGET_FPS);
     int running = 1;
 
     while (running) {
@@ -151,34 +154,23 @@ int main(int argc, char **argv) {
             }
         }
 
-        // ── Stable-frame read loop ────────────────────────────
-        // Read FB, run a gap, read again. If equal → stable → display.
-        // If not equal → game is mid-update; run more and retry.
-        for (int retry = 0; retry < 4; retry++) {
-            // Run a batch of cycles
-            run_cycles(top, inj, BATCH_CYCLES, prev_strobe, 1);
-            // Snapshot A
-            read_fb(top, fb_pixels);
-            // Run gap
-            run_cycles(top, inj, STABLE_GAP, prev_strobe, 0);
-            // Snapshot B
-            read_fb(top, fb_check);
-
-            if (fb_eq()) break;  // stable!
-            // Otherwise: keep the later snapshot and loop
-            memcpy(fb_pixels, fb_check, sizeof(fb_pixels));
+        // ── Run a batch and render ──────────────────────────────
+        run_cycles(top, inj, BATCH_CYCLES, prev_strobe, 1);
+        read_fb(top, fb_pixels);
+        static int dbg2 = 0;
+        if (dbg2 < 5) {
+            printf("run %d: (0,0)=0x%08X (15,14)=0x%08X (15,15)=0x%08X (15,17)=0x%08X\n",
+                   dbg2,
+                   fb_pixels[0*GAME_W+0],
+                   fb_pixels[15*GAME_W+14],
+                   fb_pixels[15*GAME_W+15],
+                   fb_pixels[15*GAME_W+17]);
+            dbg2++;
         }
-        // fb_pixels now holds a stable frame (or best effort)
 
         SDL_UpdateTexture(tex, NULL, fb_pixels, GAME_W * 4);
         SDL_RenderCopy(ren, tex, NULL, NULL);
         SDL_RenderPresent(ren);
-
-        // ── Throttle ───────────────────────────────────────────
-        Uint32 now = SDL_GetTicks();
-        if (now < next_frame)
-            SDL_Delay(next_frame - now);
-        next_frame = SDL_GetTicks() + (1000 / TARGET_FPS);
     }
 
     SDL_DestroyTexture(tex);

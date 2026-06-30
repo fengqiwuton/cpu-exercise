@@ -10,7 +10,7 @@
 
 static const int BAUD  = 20;
 static const int HW_W  = 80, GAME_W = 40, GAME_H = 30, SCALE = 8;
-static const char *keys = "dddssaawwddssq";
+static const char *keys = "";  // no auto keys — snake reads from terminal or SDL2
 static int ki = 0;
 
 static struct termios orig;
@@ -51,7 +51,7 @@ int main(int argc, char **argv) {
     term_raw();
     printf("=== Snake VGA (frame dump) ===\n");
 
-    int run=1, prev_s=0, frame=0, cyc=0, key_timer=0, dumped_last=0;
+    int run=1, prev_s=0, frame=0, cyc=0, key_timer=0, dumped_last=0, dbg_done=0;
     int KCYC = 200;
 
     while(run){
@@ -77,13 +77,26 @@ int main(int argc, char **argv) {
         }
         cyc++;
 
-        // Dump frame every 200 iterations
-        if (cyc - dumped_last >= 200) {
+        // Dump frame every 50 iterations (faster: see scheduler activity)
+        if (cyc - dumped_last >= 50 && frame < 20) {
             char fn[32]; sprintf(fn,"snake_%04d.bmp",frame++);
             printf("Frame %d", frame); fflush(stdout);
             dump_bmp(top, fn);
             dumped_last = cyc;
+            if (!dbg_done) {
+                // Check: counter digit at (row=1, col=2) → fb[82]
+                // Check: dot at starting position (10,20) → fb[820]
+                // Check: task debug pixels at columns inside border
+                top->vga_dbg_addr = 405; top->eval();   // (5,5) for green debug
+                printf(" [fb[405]=0x%02X]", top->vga_dbg_data);
+                top->vga_dbg_addr = 0; top->eval();
+                printf(" [fb[0]=0x%02X]", top->vga_dbg_data);
+                top->vga_dbg_addr = 80; top->eval();
+                printf(" [fb[80]=0x%02X]\n", top->vga_dbg_data);
+                dbg_done = 1;
+            }
         }
+        if (frame >= 20) run = 0;  // stop after 20 frames
     }
 
     dump_bmp(top, "snake_final.bmp");

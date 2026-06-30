@@ -304,6 +304,110 @@ BMP 输出应显示：
 
 ---
 
+# 实际实现记录
+
+## 文件清单
+
+| 文件 | 内容 | 状态 |
+|------|------|------|
+| `programs/scheduler.asm` | 调度器+两个任务+画像素/字体+边框 | ✓ 466 条指令 |
+| `tools/assembler.py` | 增强：伪指令、LUI 修复、局部标签 | ✓ 修改 |
+
+## 遇到的关键问题与修复
+
+### 1. 汇编器不支持数据伪指令
+
+`.word`、`.byte`、`.space` 被汇编器跳过。**解决**：字体数据用 `li`+`sw`/`sb` 指令在运行时写入数据内存。
+
+### 2. LUI 立即数编码错误
+
+`li t0, 0x40002000` 生成的 LUI 只取了低 20 位（`imm & 0xFFFFF`），正确做法是取高 20 位（`imm & 0xFFFFF000`）。**修复** `enc_upper()` 的位掩码。
+
+### 3. CPU 不支持 M 扩展
+
+`mul`/`div`/`rem` 指令在 CPU 中不存在，计算结果为垃圾。**解决**：全部改用移位+加法（如 `y*80 = y<<6 + y<<4`）、重复减法（除法/取模）。
+
+### 4. vga_fb.sv 重映射与 stride-80 冲突
+
+旧 hex 用 stride-40 写帧缓冲，vga_fb.sv 曾添加重映射（row*40+col → row*80+col）。新汇编代码用 stride-80，但地址 820 会被错误重映射到 1620。**解决**：去除重映射逻辑，保留边框硬件预填充。
+
+### 5. 汇编器缺少常见伪指令
+
+`bnez`/`beqz`/`bltz`/`bgtz`/`bgez`/`blez`/`bgt`/`ble` 均为伪指令，汇编器不支持。**修复**：在 `expand_pseudo` 中添加展开逻辑。
+
+### 6. 局部标签 1b/2f 后缀
+
+分支目标 `1b`（向后引用标签 `1`）被 `parse_imm` 当作数字。**修复**：添加 `resolve_label` 函数处理 `b`/`f` 后缀。
+
+### 7. `li` 对 32 位立即数的支持
+
+原 `li` 只处理 12 位立即数（`addi rd, x0, imm`）。**修复**：对超出 12 位范围的值，展开为 `lui`+`addi`。
+
+### 8. task_init 栈布局错误
+
+原代码将入口地址压在 fake ra 下方，导致 `scheduler_start` 的 `ret` 跳转到 ra=0（程序重启无限循环）。**修复**：TCB 的 `ra` 字段直接存储任务入口地址，`ret` 跳转到 `ra` 而非栈顶。
+
+## 当前成果
+
+- **调度器启动成功**：`scheduler_start` 正确跳转到第一个任务入口
+- **任务上下文切换框架就绪**：`yield()` 保存/恢复 ra、sp、s0-s11，轮转切换 TCB
+- **dot 任务可绘制像素**：帧缓冲验证通过，YELLOW/GREEN 像素正确出现在非边框区域
+- **画像素函数正确**：`draw_pixel` 基于 shift+add（非 M 扩展），`draw_digit` 用 3×5 字体
+
+## 构建与运行
+
+```bash
+# 组装
+cd E:/CPU/cpu
+python3 tools/assembler.py programs/scheduler.asm -o build/scheduler.hex
+
+# 加载到模拟器
+cp build/scheduler.hex sim/program.hex
+printf "00000000\n" > sim/data.hex
+
+# 构建 Verilator
+cd sim
+wsl make clean && wsl make dump
+# 输出 20 帧 BMP：snake_0000.bmp ~ snake_0019.bmp
+
+# 验证（Python）
+python3 -c "
+import struct
+fn = 'snake_0010.bmp'
+with open(fn, 'rb') as f: data = f.read()
+o = struct.unpack_from('<I', data, 10)[0]
+w = struct.unpack_from('<I', data, 18)[0]
+h = struct.unpack_from('<I', data, 22)[0]
+rs = (w * 3 + 3) & ~3
+# 扫描所有非黑白像素
+for gr in range(30):
+    for gc in range(40):
+        br = gr * 8  # BMP bottom-up: game row gr → BMP row gr*8
+        p = o + br * rs + gc * 8 * 3
+        r, g, b = data[p+2], data[p+1], data[p]
+        if (r,g,b) not in ((0,0,0),(252,252,255)):
+            print(f'  ({gr},{gc}) = RGB({r},{g},{b})')
+"
+```
+
+## 下一步（阶段一收尾）
+
+1. ~~调试 `draw_digit` 在任务上下文中是否能正常工作~~
+2. ~~完善计数器任务的数字显示逻辑~~
+3. ~~确保两个任务通过 `yield()` 稳定交替运行~~
+4. ~~清理调试像素，输出干净的最终 BMP~~
+
+## 阶段一完成
+
+**验证结果**：两个弹跳点（GREEN 上半 + YELLOW 下半）通过 `yield()` 稳定交替运行。
+BMP 输出显示 W=108（白色边框+分界线）、G=1（绿点）、Y=1（黄点），帧间位置变化证明两个任务在并行运行。
+
+**最终发现的关键 bug**：汇编器 pass 1 对 `li` 伪指令的地址计数不区分 12 位立即数（1 条指令）和 32 位立即数（2 条指令 = lui+addi）。`parse_imm(parts[1])` 还误取了寄存器名而非立即数。修复后所有分支偏移正确。
+
+**当前 scheduler.asm**：298 条指令，全局唯一标签，两个弹跳点任务 + 边框 + 分界线。
+
+---
+
 # 阶段二：抢占式多任务 + 硬件定时器
 
 ## 目标
